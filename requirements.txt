@@ -1,0 +1,22 @@
+langgraph>=1.0.3
+langchain-openai>=1.0.3
+langchain>=1.0.7
+langchain-mcp-adapters>=0.1.13
+python-dotenv>=1.2.1
+langchain-community>=0.4.1
+ag-ui-protocol
+fastapi
+uvicorn 
+copilotkit
+async_lru
+markdownify
+trafilatura
+bs4
+httpx
+tavily-python
+deepagents
+crawl4ai
+psycopg[binary,pool]
+langgraph-checkpoint-postgres
+markitdown[pdf, docx, pptx, xlsx]
+
