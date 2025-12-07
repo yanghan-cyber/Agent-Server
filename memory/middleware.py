@@ -1,6 +1,13 @@
 from datetime import datetime
-from typing import List
-from langchain.agents.middleware import AgentMiddleware
+from typing import Awaitable, Callable, List, cast
+from langchain.agents.middleware.types import (
+    AgentMiddleware,
+    ModelCallResult,
+    ModelRequest,
+    ModelResponse,
+    OmitFromInput,
+)
+from langchain.messages import SystemMessage
 from .memos_client import MemosClient
 from langchain_core.messages.base import BaseMessage
 from langchain.tools import tool
@@ -75,7 +82,7 @@ class MemOSMiddleware(AgentMiddleware):
 
     def __init__(self):
         super().__init__()
-
+        self.system_prompt = MEMO_SYSTEM_PROMPT
         @tool(description=SEARCH_MEMO_TOOL_DESCRIPTION)
         def search_memos(
             query: str,
@@ -245,3 +252,39 @@ class MemOSMiddleware(AgentMiddleware):
         messages_without_timestamp = list(reversed(messages_without_timestamp))
         self.new_messages.extend(messages_without_timestamp)
         return messages_without_timestamp
+
+    def wrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], ModelResponse],
+    ) -> ModelCallResult:
+        """Update the system message to include the todo system prompt."""
+        if request.system_message is not None:
+            new_system_content = [
+                *request.system_message.content_blocks,
+                {"type": "text", "text": f"\n\n{self.system_prompt}"},
+            ]
+        else:
+            new_system_content = [{"type": "text", "text": self.system_prompt}]
+        new_system_message = SystemMessage(
+            content=cast("list[str | dict[str, str]]", new_system_content)
+        )
+        return handler(request.override(system_message=new_system_message))
+
+    async def awrap_model_call(
+        self,
+        request: ModelRequest,
+        handler: Callable[[ModelRequest], Awaitable[ModelResponse]],
+    ) -> ModelCallResult:
+        """Update the system message to include the todo system prompt (async version)."""
+        if request.system_message is not None:
+            new_system_content = [
+                *request.system_message.content_blocks,
+                {"type": "text", "text": f"\n\n{self.system_prompt}"},
+            ]
+        else:
+            new_system_content = [{"type": "text", "text": self.system_prompt}]
+        new_system_message = SystemMessage(
+            content=cast("list[str | dict[str, str]]", new_system_content)
+        )
+        return await handler(request.override(system_message=new_system_message))
