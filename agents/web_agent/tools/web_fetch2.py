@@ -3,6 +3,7 @@ import socket
 import ipaddress
 import asyncio
 import aiohttp
+import aiofiles
 import tempfile
 import mimetypes
 from urllib.parse import urlparse
@@ -65,19 +66,19 @@ async def _process_with_markitdown(url: str, content_type: str = None) -> str:
     文档处理通道：下载 -> 保存临时文件(带正确后缀) -> MarkItDown 转换
     """
     print(f"[MarkItDown] Downloading doc: {url}")
-    
+
     temp_path = None
     try:
         async with aiohttp.ClientSession(headers=BROWSER_HEADERS) as session:
             async with session.get(url) as response:
                 if response.status != 200:
                     return f"<error>Download failed: HTTP {response.status}</error>"
-                
+
                 # --- 智能确定文件后缀 ---
                 # 优先使用显式传入的类型，否则从响应头读取
                 if not content_type:
                     content_type = response.headers.get('Content-Type', '').split(';')[0].strip().lower()
-                
+
                 # 1. 查表
                 ext = MIME_TO_EXT.get(content_type)
                 # 2. 猜测
@@ -91,11 +92,19 @@ async def _process_with_markitdown(url: str, content_type: str = None) -> str:
 
                 print(f"[MarkItDown] Type: {content_type} | Ext: {ext}")
 
-                # 创建临时文件 (注意 delete=False，我们需要路径传给 markitdown)
-                with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as temp_file:
-                    temp_path = temp_file.name
+                # 创建临时文件 - 使用异步方式避免阻塞
+                loop = asyncio.get_running_loop()
+                temp_file = await loop.run_in_executor(
+                    None,
+                    lambda: tempfile.NamedTemporaryFile(delete=False, suffix=ext)
+                )
+                temp_path = temp_file.name
+                temp_file.close()  # 关闭文件句柄，准备异步写入
+
+                # 使用 aiofiles 进行真正的异步文件写入
+                async with aiofiles.open(temp_path, 'wb') as f:
                     async for chunk in response.content.iter_chunked(1024):
-                        temp_file.write(chunk)
+                        await f.write(chunk)
         
         # --- 调用 MarkItDown (同步代码放入线程池) ---
         def run_sync_convert(path):
@@ -107,16 +116,21 @@ async def _process_with_markitdown(url: str, content_type: str = None) -> str:
 
         loop = asyncio.get_running_loop()
         markdown_text = await loop.run_in_executor(None, run_sync_convert, temp_path)
-        
+
         return f"# Document Content (Source: {content_type})\n\n{markdown_text}"
 
     except Exception as e:
         return f"<error>MarkItDown failed: {str(e)}</error>"
     finally:
-        # 清理垃圾
-        if temp_path and os.path.exists(temp_path):
-            try: os.remove(temp_path)
-            except: pass
+        # 异步清理临时文件
+        if temp_path:
+            async def cleanup_file():
+                try:
+                    if await asyncio.to_thread(os.path.exists, temp_path):
+                        await asyncio.to_thread(os.remove, temp_path)
+                except:
+                    pass
+            await cleanup_file()
 
 @alru_cache(maxsize=32, ttl=600)
 async def _crawl_url(url: str) -> str:

@@ -29,7 +29,7 @@ load_dotenv(override=True)
 
 @dataclass
 class Context:
-    thread_id: str
+    thread_id: str 
     user_id: str
 
 
@@ -104,8 +104,8 @@ agent = create_agent(
             ],
         ),
     ],
-    checkpointer=InMemorySaver(),
-    context_schema=Context,
+    # checkpointer=InMemorySaver(),
+    # context_schema=Context,
 )
 
 
@@ -119,10 +119,10 @@ if __name__ == "__main__":
         async for mode, chunk in agent.astream(
             {"messages": [{"role": "user", "content": user_input}]},
             config=config1,
-            context=context,
+            # context=context,
             stream_mode=["values"],
         ):
             if "messages" in chunk:
                 chunk["messages"][-1].pretty_print()
 
-    asyncio.run(main("读取一下当前的文件夹里的所有文件内容，对我进行一个更多的了解。"))
+    asyncio.run(main("查看一下当前的文件夹，并且查看一下里面的内容是什么"))

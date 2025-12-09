@@ -1,6 +1,7 @@
+import asyncio
 import os
 from typing import Literal, Optional
-from langchain.tools import tool  
+from langchain.tools import tool
 from pydantic import BaseModel, Field
 from tavily import TavilyClient
 
@@ -28,7 +29,7 @@ class SearchInput(BaseModel):
         description="返回结果的数量。默认返回5 条结果。"
     )
 @tool(args_schema=SearchInput)
-def web_search(query: str, topic: str = "general", days: Optional[int] = None, search_depth: str = "basic", max_results: int = 5) -> str:
+async def web_search(query: str, topic: str = "general", days: Optional[int] = None, search_depth: str = "basic", max_results: int = 5) -> str:
     """
     使用 Tavily 搜索引擎查找互联网信息。
     返回结果包含：标题、URL、以及页面内容的简短摘要。
@@ -45,9 +46,10 @@ def web_search(query: str, topic: str = "general", days: Optional[int] = None, s
 
     try:
         print(f"[Tavily] Searching: {query} (Depth: {search_depth})")
-        
-        # 执行搜索
-        response = tavily_client.search(
+
+        # 将阻塞的同步调用包装到线程中执行
+        response = await asyncio.to_thread(
+            tavily_client.search,
             query=query,
             days=days,
             topic=topic,

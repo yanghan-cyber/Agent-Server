@@ -7,11 +7,11 @@ class WebAgentMiddleware(AgentMiddleware):
         self.max_iterations = max_iterations
         self.iteration_count = 0
 
-    def before_agent(self, state, runtime):
+    async def abefore_agent(self, state, runtime):
         
         return self.inject_env()
     
-    def before_model(self, state, runtime):
+    async def abefore_model(self, state, runtime):
         self.iteration_count += 1
         if (self.iteration_count < self.max_iterations):
             if (self.max_iterations-self.iteration_count) < 3:

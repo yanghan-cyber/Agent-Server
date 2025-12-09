@@ -221,3 +221,5 @@ __marimo__/
 TODO.md
 agent-store-space/*
 !agent-store-space/.gitkeep
+.langgraph_api/
+docs/

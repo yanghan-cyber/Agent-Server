@@ -10,7 +10,7 @@ from langchain.agents.middleware.types import (
 from langchain.messages import SystemMessage
 from .memos_client import MemosClient
 from langchain_core.messages.base import BaseMessage
-from langchain.tools import tool
+from langchain.tools import tool, ToolRuntime
 
 SEARCH_MEMO_TOOL_DESCRIPTION = """
 This tool is your access to the User's Long-Term Memory (facts, preferences, past projects).
@@ -78,13 +78,13 @@ If `search_memos` returns nothing:
 
 
 class MemOSMiddleware(AgentMiddleware):
-    memo_client = MemosClient()
-
     def __init__(self):
         super().__init__()
         self.system_prompt = MEMO_SYSTEM_PROMPT
+        self._memo_client = None
+        
         @tool(description=SEARCH_MEMO_TOOL_DESCRIPTION)
-        def search_memos(
+        async def search_memos(
             query: str,
             memory_limit: int = 10,
             include_preference: bool = True,
@@ -95,13 +95,13 @@ class MemOSMiddleware(AgentMiddleware):
             Search user's long-term memory.
             Returns a clean, summarized text for the AI to read.
             """
-            # 1. 获取 ID (假设你已经解决了 runtime 注入问题，或者使用闭包捕获了 user_id)
-            user_id = getattr(runtime.context, "user_id", "default_user") if runtime else "default_user"
-            conversation_id = getattr(runtime.context, "thread_id", None) if runtime else None
-            
+            # 1. 获取 ID
+            user_id = getattr(runtime, "config", {}).get("metadata", {}).get("user_id", "default_user") if runtime else "default_user"
+            conversation_id = getattr(runtime, "config", {}).get("metadata", {}).get("thread_id", None) if runtime else None
+
             # 2. 调用 API
             try:
-                raw_result = self.memo_client.search_memory(
+                raw_result = await self.memo_client.search_memory(
                     user_id,
                     query,
                     conversation_id,
@@ -118,57 +118,40 @@ class MemOSMiddleware(AgentMiddleware):
 
             memories = raw_result.get("memory_detail_list", [])
             preferences = raw_result.get("preference_detail_list", [])
-            
+
             output_lines = []
 
             # --- A. 处理偏好 (Preferences) ---
             if include_preference and preferences:
                 output_lines.append("### ❤️ User Preferences (High Priority)")
-                
+
                 for p in preferences:
-                    # 提取核心字段
                     pref_text = p.get("preference", "").strip()
                     reason = p.get("reasoning", "").strip()
                     p_type = p.get("preference_type", "implicit")
-                    
-                    # 格式化
-                    # [Explicit] 用户喜欢辣... (Reason: ...)
                     line = f"- [{p_type.capitalize()}] {pref_text}"
                     if reason:
                         line += f"\n  (Context: {reason})"
                     output_lines.append(line)
-                
-                output_lines.append("") # 空行分隔
+
+                output_lines.append("")
 
             # --- B. 处理事实记忆 (Fact Memories) ---
             if memories:
                 output_lines.append("### 📝 Relevant Facts & Context")
-                
-                # 去重逻辑 (可选)：有时候向量检索会返回重复内容
                 seen_values = set()
-                
+
                 for m in memories:
                     val = m.get("memory_value", "").strip()
-                    
-                    # 1. 过滤掉无意义的系统日志或 Raw Chat
-                    # 你的数据里有一些 "user: [time]: ...", 这种最好清洗一下或者直接展示
-                    # 如果 memory_key 是 "assistant:" 或 "user:" 开头，且内容很短，可能价值不高
                     if len(val) < 5 or val in seen_values:
                         continue
-                    
+
                     seen_values.add(val)
-                    
-                    # 2. 提取元数据
                     m_type = m.get("memory_type", "General")
                     confidence = m.get("confidence", 0)
                     key = m.get("memory_key", "")
-                    
-                    # 3. 智能格式化
-                    # 如果 Key 很有意义（不是自动生成的 user:xxx），就展示 Key
                     prefix = f"[{key}] " if key and not key.startswith(("user:", "assistant:")) else ""
-                    
-                    # 4. 时间处理 (如果有 create_time)
-                    # create_time 是毫秒级时间戳 -> 转可读时间
+
                     ts = m.get("create_time")
                     time_str = ""
                     if ts:
@@ -180,28 +163,39 @@ class MemOSMiddleware(AgentMiddleware):
 
                     output_lines.append(f"- {prefix}{val}{time_str}")
 
-            # --- C. 最终组装 ---
             if not output_lines:
                 return "No relevant memories found."
-            
-            # 添加头部提示，强化 LLM 的注意力
+
             final_output = "\n".join(output_lines)
             return f"[MemOS] retrieved the following context from long-term memory:\n\n{final_output}"
 
+        # 注册工具
         self.tools = [search_memos]
 
-    def before_agent(self, state, runtime):
-        user_id = getattr(runtime.context, "user_id", "default_user")
-        conversation_id = getattr(runtime.context, "thread_id", "default_conversation")
-        self.memo_client.add_messages(
-            user_id, conversation_id, self.messages_to_dicts(state["messages"][-1:])
+    @property
+    def memo_client(self):
+        """延迟初始化 memo_client，确保在 async context 中创建"""
+        if self._memo_client is None:
+            self._memo_client = MemosClient()
+        return self._memo_client
+
+
+    async def abefore_agent(self, state, runtime):
+        user_id = getattr(runtime, "config", {}).get("metadata", {}).get("user_id", "default_user") if runtime else "default_user"
+        conversation_id = getattr(runtime, "config", {}).get("metadata", {}).get("thread_id", None) if runtime else None
+        await self.memo_client.add_messages(
+            user_id,
+            conversation_id,
+            self.messages_to_dicts(state["messages"][-1:])
         )
 
-    def after_model(self, state, runtime):
-        user_id = getattr(runtime.context, "user_id", "default_user")
-        conversation_id = getattr(runtime.context, "thread_id", "default_conversation")
-        self.memo_client.add_messages(
-            user_id, conversation_id, self.messages_to_dicts(state["messages"][-1:])
+    async def aafter_model(self, state, runtime):
+        user_id = getattr(runtime, "config", {}).get("metadata", {}).get("user_id", "default_user") if runtime else "default_user"
+        conversation_id = getattr(runtime, "config", {}).get("metadata", {}).get("thread_id", None) if runtime else None
+        await self.memo_client.add_messages(
+            user_id,
+            conversation_id,
+            self.messages_to_dicts(state["messages"][-1:])
         )
 
     def messages_to_dicts(self, messages: List[BaseMessage]):

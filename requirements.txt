@@ -19,4 +19,5 @@ crawl4ai
 psycopg[binary,pool]
 langgraph-checkpoint-postgres
 markitdown[pdf, docx, pptx, xlsx]
-
+aiofiles
+grpcio>=1.75.1

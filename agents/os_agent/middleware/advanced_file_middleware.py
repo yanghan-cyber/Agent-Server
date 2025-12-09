@@ -64,8 +64,25 @@ class AdvancedFileMiddleware(AgentMiddleware):
     def __init__(self, backend: BackendProtocol):
         super().__init__()
         self.backend = backend
-        
-        # --- Initialize MarkItDown Configuration ---
+        self.md_converter = None
+        self._md_converter_lock = asyncio.Lock()
+        self.system_prompt = ADVANCED_FILE_SYSTEM_PROMPT
+        self.tools = [self._create_advanced_read_tool()]
+
+    async def _ensure_md_converter(self):
+        """延迟初始化 MarkItDown，避免在构造函数中执行阻塞操作"""
+        if self.md_converter is not None:
+            return
+
+        async with self._md_converter_lock:
+            if self.md_converter is not None:
+                return
+
+            # 将可能阻塞的初始化移到线程中执行
+            self.md_converter = await asyncio.to_thread(self._init_markitdown)
+
+    def _init_markitdown(self):
+        """在线程中执行 MarkItDown 的同步初始化"""
         api_key = os.environ.get("MARKITDOWN_OPENAI_API_KEY") or os.environ.get("OPENAI_API_KEY")
         base_url = os.environ.get("MARKITDOWN_OPENAI_BASE_URL") or os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1")
         model_name = os.environ.get("MARKITDOWN_MODEL", "gpt-4o")
@@ -87,41 +104,37 @@ If TYPE B: Provide a descriptive summary of what is shown in the image.
                     api_key=api_key,
                     base_url=base_url
                 )
-                
-                self.md_converter = MarkItDown(
+
+                return MarkItDown(
                     llm_client=client,
                     llm_model=model_name,
                     llm_prompt=llm_prompt
                 )
             except Exception as e:
                 print(f"[MarkItDown] LLM Init Error: {e}. Falling back to basic mode.")
-                self.md_converter = MarkItDown()
+                return MarkItDown()
         else:
             print("[MarkItDown] Running in basic mode (No Image/OCR support).")
-            self.md_converter = MarkItDown()
+            return MarkItDown()
 
-        self.system_prompt = ADVANCED_FILE_SYSTEM_PROMPT
+    def _create_advanced_read_tool(self):
+        """Create the advanced_read_file tool"""
 
-        # --- Define Tool as Closure ---
-        # This captures self.backend and self.md_converter safely
-        @tool(description=ADVANCED_READ_TOOL_DESCRIPTION)
-        async def advanced_read_file(file_path: str, offset: int = 0, limit: int = 2000) -> str:
-            """
-            Reads ANY file format (PDF, Excel, Word, PPT, Images, Code) and converts it to Markdown text.
-            """
-            
+        # 定义内部工作函数（可能包含阻塞调用）
+        def _process_file_sync(file_path: str, offset: int, limit: int) -> str:
+            """同步处理文件（可能包含阻塞操作）"""
             # 1. Backend Check & Path Resolution
             if isinstance(self.backend, FilesystemBackend):
                 try:
                     # Reuse FilesystemBackend's secure path resolution
                     resolved_path = self.backend._resolve_path(file_path)
-                    
+
                     if not resolved_path.exists():
                         return f"<error>File '{file_path}' not found.</error>"
-                    
+
                     if not resolved_path.is_file():
                         return f"<error>Path '{file_path}' is not a file.</error>"
-                    
+
                     abs_path_str = str(resolved_path)
 
                 except ValueError as e:
@@ -130,8 +143,26 @@ If TYPE B: Provide a descriptive summary of what is shown in the image.
                 # Reject unsupported backends
                 return f"<error>This tool requires a FilesystemBackend. Current backend: {type(self.backend).__name__}</error>"
 
+            return abs_path_str
+
+        @tool(description=ADVANCED_READ_TOOL_DESCRIPTION)
+        async def advanced_read_file(file_path: str, offset: int = 0, limit: int = 2000) -> str:
+            """
+            Reads ANY file format (PDF, Excel, Word, PPT, Images, Code) and converts it to Markdown text.
+            """
+
+            # 使用 asyncio.to_thread 执行可能阻塞的文件系统操作
+            try:
+                abs_path_str = await asyncio.to_thread(_process_file_sync, file_path, offset, limit)
+                if abs_path_str.startswith("<error>"):
+                    return abs_path_str
+            except Exception as e:
+                return f"<error>File processing failed: {str(e)}</error>"
+
             # 2. Core Conversion Logic (Cached & Async)
             try:
+                # 确保 md_converter 已初始化
+                await self._ensure_md_converter()
                 full_content = await self._convert_file_cached(abs_path_str)
             except Exception as e:
                 return f"<error>Failed to convert file content: {str(e)}</error>"
@@ -140,15 +171,15 @@ If TYPE B: Provide a descriptive summary of what is shown in the image.
             if not full_content or not full_content.strip():
                 return "<system-reminder>File exists but content is empty (or parsing returned no text).</system-reminder>"
 
-            # 4. Pagination Logic 
-            full_len = len(full_content)           
+            # 4. Pagination Logic
+            full_len = len(full_content)
             if offset >= full_len:
                 return f"<system-reminder>End of content. Total length: {full_len}.</system-reminder>"
 
             end_index = min(offset + limit, full_len)
-            
+
             result_text = full_content[offset:end_index]
-            
+
             # 5. Truncation Warning
             footer = ""
             if end_index < full_len:
@@ -157,8 +188,7 @@ If TYPE B: Provide a descriptive summary of what is shown in the image.
                 footer = "\n\n<system-reminder>End of content.</system-reminder>"
             return f"### File Content: {file_path}\n{result_text}{footer}"
 
-        self.tools = [advanced_read_file]
-
+        return advanced_read_file
     # --- Internal Methods ---
 
     @alru_cache(maxsize=32, ttl=600)
@@ -166,12 +196,15 @@ If TYPE B: Provide a descriptive summary of what is shown in the image.
         """
         Internal method: Run time-consuming MarkItDown conversion in thread pool and cache result.
         """
+        # 确保 md_converter 已初始化
+        await self._ensure_md_converter()
+
         loop = asyncio.get_running_loop()
         try:
             # MarkItDown.convert is synchronous/blocking, so run it in executor
             result = await loop.run_in_executor(
-                None, 
-                self.md_converter.convert, 
+                None,
+                self.md_converter.convert,
                 abs_file_path
             )
             return result.text_content
@@ -218,7 +251,7 @@ If TYPE B: Provide a descriptive summary of what is shown in the image.
         )
         return await handler(request.override(system_message=new_system_message))
     
-    def before_agent(self, state, runtime):
+    async def abefore_agent(self, state, runtime):
         content = ""
         content += f"""<env>Current Datetime: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</env>\n"""
 
@@ -248,7 +281,7 @@ if __name__ == "__main__":
         
         res = await mid.tools[0].ainvoke(
             {
-                "file_path": "D:/ai_lab/langgraph-agents/agent-store-space/鬼灭之刃无限城电影票根.jpg"
+                "file_path": "D:/ai_lab/langgraph-agents/agent-store-space/.gitkeep"
             }
         )
         

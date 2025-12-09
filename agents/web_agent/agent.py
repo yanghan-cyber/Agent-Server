@@ -1,12 +1,12 @@
 import os
 from langchain.agents import create_agent
 
-from .middleware import WebAgentMiddleware
+from agents.web_agent.middleware import WebAgentMiddleware
 
 from langchain.agents.middleware import TodoListMiddleware
-from .tools import web_fetch, web_search
+from agents.web_agent.tools import web_fetch, web_search
 from langchain_openai import ChatOpenAI
-from .prompt import RESEARCHER_SYSTEM_PROMPT
+from agents.web_agent.prompt import RESEARCHER_SYSTEM_PROMPT
 
 web_agent = create_agent(
     model=ChatOpenAI(model=os.getenv("OPENAI_MODEL")),
@@ -34,14 +34,10 @@ if __name__ == "__main__":
 
     async def main():
         async for mode, chunk in web_agent.astream(
-            {"messages": "领益智造这支股票有投资的价值吗？"}, stream_mode=["values"]
+            {"messages": "Deepseek v3.2的创新技术有哪些？"}, stream_mode=["values"]
         ):
             if "messages" in chunk:
                 chunk["messages"][-1].pretty_print()
-        async for mode, chunk in web_agent.astream(
-            {"messages": "领益智造这支股票有投资的价值吗？"}, stream_mode=["values"]
-        ):
-            if "messages" in chunk:
-                chunk["messages"][-1].pretty_print()
+
 
     asyncio.run(main())
