@@ -11,6 +11,7 @@ from langchain.messages import SystemMessage
 from .memos_client import MemosClient
 from langchain_core.messages.base import BaseMessage
 from langchain.tools import tool, ToolRuntime
+from langgraph.config import get_config
 
 SEARCH_MEMO_TOOL_DESCRIPTION = """
 This tool is your access to the User's Long-Term Memory (facts, preferences, past projects).
@@ -181,8 +182,9 @@ class MemOSMiddleware(AgentMiddleware):
 
 
     async def abefore_agent(self, state, runtime):
-        user_id = getattr(runtime, "config", {}).get("metadata", {}).get("user_id", "default_user") if runtime else "default_user"
-        conversation_id = getattr(runtime, "config", {}).get("metadata", {}).get("thread_id", None) if runtime else None
+        config = get_config()
+        user_id = config.get("metadata", {}).get("user_id", "default_user") if config else "default_user"
+        conversation_id = config.get("metadata", {}).get("thread_id", None) if config else None
         await self.memo_client.add_messages(
             user_id,
             conversation_id,
@@ -190,8 +192,9 @@ class MemOSMiddleware(AgentMiddleware):
         )
 
     async def aafter_model(self, state, runtime):
-        user_id = getattr(runtime, "config", {}).get("metadata", {}).get("user_id", "default_user") if runtime else "default_user"
-        conversation_id = getattr(runtime, "config", {}).get("metadata", {}).get("thread_id", None) if runtime else None
+        config = get_config()
+        user_id = config.get("metadata", {}).get("user_id", "default_user") if config else "default_user"
+        conversation_id = config.get("metadata", {}).get("thread_id", None) if config else None
         await self.memo_client.add_messages(
             user_id,
             conversation_id,
