@@ -243,7 +243,7 @@ def setup_logger():
 
     # --- 全局配置 ---
     logger.configure(patcher=context_patcher)
-    intercept_standard_logging()
+    # intercept_standard_logging()
     
     return logger
 

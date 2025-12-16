@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import os
 
 from deepagents import CompiledSubAgent
 from deepagents.backends import FilesystemBackend
@@ -32,11 +33,11 @@ logger = get_logger(__name__)
 
 @dataclass
 class Context:
-    thread_id: str 
+    thread_id: str
     user_id: str
 
 
-default_model = ChatOpenAI(model="glm-4.6")
+default_model = ChatOpenAI(model=os.getenv("OPENAI_MODEL"))
 
 backend = FilesystemBackend(
     "D:/ai_lab/langgraph-agents/agent-store-space", virtual_mode=True
@@ -107,7 +108,8 @@ agent = create_agent(
             ],
         ),
     ],
-    # checkpointer=InMemorySaver(),
+    checkpointer=InMemorySaver(),
+    
     # context_schema=Context,
 )
 
@@ -116,17 +118,21 @@ if __name__ == "__main__":
     import asyncio
 
     context = {"thread_id": "user_123", "user_id": "user_default"}
-    config1 = {"configurable": context}
+    config1 = {"configurable": context, "callbacks": [], "recursion_limit": 100}
 
+    from api.event_handler import LanggraphAgent
+    
+    s = LanggraphAgent()
+    
     async def main(user_input):
-        async for mode, chunk in agent.astream(
+        event_stream =  agent.astream_events(
             {"messages": [{"role": "user", "content": user_input}]},
             config=config1,
-            # context=context,
-            stream_mode=["values"],
-        ):
-            if "messages" in chunk:
-                chunk["messages"][-1].pretty_print()
-                # message = chunk["messages"][-1]
-                # logger.info(f"Agent response:\n{message}")
-    asyncio.run(main("今天星期几啦"))
+            context=context,
+            # stream_mode=["messages"],
+            
+        )
+        async for  event in event_stream:
+            await s._process_event(event)
+        
+    asyncio.run(main("同时给我查找一下当前的湖南长沙，邵阳的天气"))
