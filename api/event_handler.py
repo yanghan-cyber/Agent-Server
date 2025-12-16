@@ -8,6 +8,7 @@ from langgraph.types import Command
 # 假设这些类已经从 events.py 导入
 from api.models.events import (
     Event,
+    RawEvent,
     EventType,
     RunStartedEvent,
     RunFinishedEvent,
@@ -38,7 +39,7 @@ from langgraph.graph.state import CompiledStateGraph
 from langchain_core.runnables import RunnableConfig
 from utils.logger import get_logger
 
-logger = get_logger('test')
+logger = get_logger()
 class LangGraphAgent:
     def __init__(self,name, graph: CompiledStateGraph,  description: Optional[str] = None, config:  Union[Optional[RunnableConfig], dict] = None):
         # 定义需要忽略的内部链名称，避免生成过多无意义的 Step 事件
@@ -55,8 +56,8 @@ class LangGraphAgent:
 
         
     async def run(self, input_data: RunAgentInput):
-        async for event in self.graph.astream_events(input={"messages": input_data['messages']}, config=self.config):
-            yield await self._process_event(event)
+        async for event in self._handle_stream_events(input_data):
+            yield event
     
     def _dispatch_event(self, event: Event):
         """
@@ -66,7 +67,6 @@ class LangGraphAgent:
             event.event = make_json_safe(event.event)
         elif event.raw_event:
             event.raw_event = make_json_safe(event.raw_event)
-        print(f"Dispatching: {event.type} - {event.model_dump_json(exclude_none=True)}")
 
         return event
 
@@ -83,6 +83,7 @@ class LangGraphAgent:
     async def _process_event(self, event: Dict[str, Any]):
         """
         处理 LangGraph v2 协议的事件，并转换为 Agent Protocol 事件
+        使用 yield 生成事件，以便在 _handle_stream_events 中使用 async for 处理
         """
         event_type = event["event"]
         name = event["name"]
@@ -100,18 +101,18 @@ class LangGraphAgent:
                 # 如果没有父级 ID，说明是整个 Graph (Run) 的开始
                 logger.debug(f"STEP Start: [{name}]")
                 if not parent_ids:
-                    self._dispatch_event(
+                    yield self._dispatch_event(
                         RunStartedEvent(
                             timestamp=ts,
                             run_id=run_id,
                             thread_id=metadata.get("thread_id"),
-                            input=None 
+                            input=None
                         )
                     )
                 # 否则，如果是具体的节点（Node）或 Chain，且不在忽略列表中
                 elif name not in self.ignored_chains:
                     if self.active_run['node_name'] != name:
-                        self._dispatch_event(
+                        yield self._dispatch_event(
                             StepStartedEvent(
                                 timestamp=ts,
                                 step_name=name
@@ -126,7 +127,7 @@ class LangGraphAgent:
                 # 根节点结束 -> RunFinished
                 if not parent_ids:
                     # 获取最终输出结果
-                    self._dispatch_event(
+                    yield self._dispatch_event(
                         RunFinishedEvent(
                             timestamp=ts,
                             run_id=run_id,
@@ -136,7 +137,7 @@ class LangGraphAgent:
                     )
                 # 子节点结束 -> StepFinished
                 elif name not in self.ignored_chains:
-                    self._dispatch_event(
+                    yield self._dispatch_event(
                         StepFinishedEvent(
                             timestamp=ts,
                             step_name=name
@@ -151,7 +152,7 @@ class LangGraphAgent:
             case "on_chain_error":
                 # 如果是根节点报错
                 if not parent_ids:
-                    self._dispatch_event(
+                    yield self._dispatch_event(
                         RunErrorEvent(
                             timestamp=ts,
                             message=str(data.get("error", "Unknown Error")),
@@ -162,7 +163,7 @@ class LangGraphAgent:
             # --- 2. Chat Model (LLM) 交互 ---
             case "on_chat_model_start":
                 # LLM 开始思考/生成
-                pass 
+                return
             
             case "on_chat_model_stream":
                 # LLM 流式输出 (打字机效果)
@@ -175,16 +176,16 @@ class LangGraphAgent:
                 
                 if chunk.id not in self.messages_id:
                     self.messages_id.add(chunk.id)
-                    self._dispatch_event(
-                    TextMessageStartEvent(
-                        timestamp=ts,
-                        message_id=chunk.id,
-                        raw_event=event,
+                    yield self._dispatch_event(
+                        TextMessageStartEvent(
+                            timestamp=ts,
+                            message_id=chunk.id,
+                            raw_event=event,
+                        )
                     )
-                )
 
                 if content:
-                    self._dispatch_event(
+                    yield self._dispatch_event(
                         TextMessageContentEvent(
                             timestamp=ts,
                             message_id=chunk.id,
@@ -195,7 +196,7 @@ class LangGraphAgent:
 
             case "on_chat_model_end":
                 # LLM 生成结束
-                self._dispatch_event(
+                yield self._dispatch_event(
                     TextMessageEndEvent(
                         timestamp=ts,
                         message_id=data['output'].id,
@@ -210,7 +211,7 @@ class LangGraphAgent:
                 args = data.get("input", {})
                 name = event.get("name")
                 tool_call_data = self._get_tool_call_data(name, args)
-                self._dispatch_event(
+                yield self._dispatch_event(
                     ToolCallStartEvent(
                         timestamp=ts,
                         tool_call_id=tool_call_data['id'],
@@ -222,7 +223,7 @@ class LangGraphAgent:
                 )
                 
                 # 如果需要发送参数细节，也可以在这里发送 ToolCallArgsEvent
-                self._dispatch_event(
+                yield self._dispatch_event(
                     ToolCallArgsEvent(
                         timestamp=ts,
                         tool_call_id=tool_call_data['id'],
@@ -240,7 +241,7 @@ class LangGraphAgent:
                     messages = output.update.get('messages', [])
                     tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
                     for tool_msg in tool_messages:
-                        self._dispatch_event(
+                        yield self._dispatch_event(
                             ToolCallEndEvent(
                                 timestamp=ts,
                                 tool_call_id=tool_msg.tool_call_id,
@@ -248,7 +249,7 @@ class LangGraphAgent:
                             )
                         )
                         
-                        self._dispatch_event(
+                        yield self._dispatch_event(
                             ToolCallResultEvent(
                                 timestamp=ts,
                                 message_id=str(uuid.uuid4()),
@@ -256,20 +257,19 @@ class LangGraphAgent:
                                 content=tool_msg.content,
                             )
                         )
-                else: 
-                    
-                                    # 序列化输出内容
+                else:
+                    # 序列化输出内容
                     args = data.get("input", {})
                     name = event.get("name")
                     tool_call_data = self._get_tool_call_data(name, args)
-                    self._dispatch_event(
+                    yield self._dispatch_event(
                         ToolCallEndEvent(
                             timestamp=ts,
                             tool_call_id=tool_call_data['id'],
                             raw_event=event,
                         )
                     )
-                    self._dispatch_event(
+                    yield self._dispatch_event(
                         ToolCallResultEvent(
                             timestamp=ts,
                             message_id=str(uuid.uuid4()), # 通常结果绑定在调用 ID 上
@@ -281,7 +281,7 @@ class LangGraphAgent:
             
             case _:
                 # 其他事件，忽略
-                pass    
+                yield RawEvent(timestamp=ts, event=event)
     
     def _add_tool_call_data(self, tool_call_data: Dict[str, Any]):
         tool_name = tool_call_data["name"]
@@ -307,6 +307,12 @@ class LangGraphAgent:
         node_name_input = forwarded_props.get('node_name', None) if forwarded_props else None
         config = self.config.copy() if self.config else {}
         config["configurable"] = {**(config.get('configurable', {})), "thread_id": thread_id}
+        
+        # 从forwarded_props中提取user_id并添加到config中
+        if forwarded_props and "user_id" in forwarded_props:
+            config["configurable"]["user_id"] = forwarded_props["user_id"]
+            logger.info(f"Extracted user_id from forwarded_props: {forwarded_props['user_id']}")
+        
         agent_state = await self.graph.aget_state(config)
 
         resume_input = forwarded_props.get('command', {}).get('resume', None)
@@ -326,7 +332,10 @@ class LangGraphAgent:
                     RunErrorEvent(type=EventType.RUN_ERROR, message=event["data"]["message"], raw_event=event)
                 )
                 break
-            yield await self._process_event(event)
+            # 使用 async for 处理 _process_event 生成的事件
+            async for processed_event in self._process_event(event):
+                if processed_event is not None:
+                    yield processed_event
     async def prepare_stream(self, input: RunAgentInput, agent_state: State, config: RunnableConfig):
         state_input = input.state or {}
         messages = input.messages or []

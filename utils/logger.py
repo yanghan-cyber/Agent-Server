@@ -47,7 +47,7 @@ def context_patcher(record):
         # 例如: /home/user/project/app/main.py -> app.main
         try:
             # relative_to 需要 settings.MEMOS_DIR 设置正确 (指向项目根目录)
-            relative_path = file_path.relative_to(settings.MEMOS_DIR)
+            relative_path = file_path.relative_to(settings.APP_DIR)
             
             # 将路径转换为点分模块名 (例如 app/utils/tools.py -> app.utils.tools)
             # with_suffix('') 去掉 .py
@@ -225,7 +225,7 @@ def setup_logger():
     
     # [Handler 2] File (复刻 ConcurrentTimedRotatingFileHandler)
     # 特性：记录所有日志(无过滤)，详细格式，每天轮转，保留3天(backupCount=3)
-    log_file_path = settings.MEMOS_DIR / "logs" / "app.log"
+    log_file_path = settings.APP_DIR / "logs" / "app.log"
     logger.add(
         str(log_file_path),
         rotation="00:00",    # midnight
