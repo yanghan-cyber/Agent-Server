@@ -26,12 +26,18 @@ from .context import (
 # ==========================================
 def context_patcher(record):
     """
-    Loguru Patcher: 
+    Loguru Patcher:
     1. 注入 ContextVars (TraceID, UserID等)
     2. 处理 Logger Name (支持 get_logger("custom_name"))
     """
     # 注入 ContextVars
-    record["extra"]["trace_id"] = get_current_trace_id()
+    trace_id = get_current_trace_id()
+    record["extra"]["trace_id"] = trace_id
+
+    # 为console生成短trace_id（取前12个字符）
+    trace_id_short = trace_id[:12] if trace_id else ""
+    record["extra"]["trace_id_short"] = trace_id_short
+
     record["extra"]["user_name"] = get_current_user_name()
     record["extra"]["user_type"] = get_current_user_type()
     record["extra"]["api_path"] = get_current_api_path()
@@ -39,30 +45,34 @@ def context_patcher(record):
 # 2. 处理 Logger Name
     # 逻辑：如果没有手动 bind 名字，我们自己算一个漂亮的名字
     if "custom_name" not in record["extra"]:
-        
+
         # 获取日志来源文件的绝对路径
         file_path = Path(record["file"].path)
-        
+
         # 尝试计算相对于项目根目录的路径
-        # 例如: /home/user/project/app/main.py -> app.main
+        # 例如: /home/user/project/app/main.py -> app/main
         try:
-            # relative_to 需要 settings.MEMOS_DIR 设置正确 (指向项目根目录)
+            # relative_to 需要 settings.APP_DIR 设置正确 (指向项目根目录)
             relative_path = file_path.relative_to(settings.APP_DIR)
-            
-            # 将路径转换为点分模块名 (例如 app/utils/tools.py -> app.utils.tools)
+
+            # 将路径转换为文件路径格式 (例如 app/utils/tools.py -> app/utils/tools)
             # with_suffix('') 去掉 .py
-            # parts 拆分路径，'.'.join 重新组合
+            # parts 拆分路径，'/'.join 重新组合
             module_name = "/".join(relative_path.with_suffix("").parts)
             record["extra"]["custom_name"] = module_name
-            
+
         except ValueError:
-            # 如果文件不在 MEMOS_DIR 目录下 (比如是第三方库)，或者计算失败
+            # 如果文件不在 APP_DIR 目录下 (比如是第三方库)，或者计算失败
             # 退回到默认的 record["name"]
             # 如果是 __main__，我们可以强制显示文件名
             if record["name"] == "__main__":
                 record["extra"]["custom_name"] = file_path.stem # 只显示文件名(不含后缀)
             else:
                 record["extra"]["custom_name"] = record["name"]
+
+    # 统一转换：将 custom_name 中的 . 替换为 /（统一风格为文件路径格式）
+    if "custom_name" in record["extra"]:
+        record["extra"]["custom_name"] = record["extra"]["custom_name"].replace(".", "/")
 
 # ==========================================
 # 2. 过滤器逻辑 (复刻原配置的 Log Filter)
@@ -192,10 +202,10 @@ def setup_logger():
     
     # 1. Console 格式 (对应 "no_datetime" + "simplified")
     # 通常 Console 不需要日期(Systemd会加)，且需要颜色
+    # 使用 trace_id_short (前12位) 让显示更简洁
     console_fmt = (
-        "<cyan>{extra[trace_id]}</cyan> | "
-        "path=<magenta>{extra[api_path]}</magenta> | "
-        "<magenta>{extra[custom_name]}:{line}</magenta> | " 
+        "<cyan>{extra[trace_id_short]}</cyan> | "
+        "<magenta>{extra[custom_name]}:{line}</magenta> | "
         "<level>{message}</level>"
     )
 
