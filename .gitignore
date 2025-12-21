@@ -224,3 +224,4 @@ agent-store-space/*
 .langgraph_api/
 docs/
 examples/
+tests/

@@ -227,7 +227,7 @@ class LangGraphAgent:
                     ToolCallArgsEvent(
                         timestamp=ts,
                         tool_call_id=tool_call_data['id'],
-                        delta=json.dumps(args),
+                        delta=json.dumps(args, ensure_ascii=False),
                         raw_event=event
                     )
                 )
@@ -242,19 +242,18 @@ class LangGraphAgent:
                     tool_messages = [m for m in messages if isinstance(m, ToolMessage)]
                     for tool_msg in tool_messages:
                         yield self._dispatch_event(
-                            ToolCallEndEvent(
-                                timestamp=ts,
-                                tool_call_id=tool_msg.tool_call_id,
-                                raw_event=event,
-                            )
-                        )
-                        
-                        yield self._dispatch_event(
                             ToolCallResultEvent(
                                 timestamp=ts,
                                 message_id=str(uuid.uuid4()),
                                 tool_call_id=tool_msg.tool_call_id,
                                 content=tool_msg.content,
+                            )
+                        )
+                        yield self._dispatch_event(
+                            ToolCallEndEvent(
+                                timestamp=ts,
+                                tool_call_id=tool_msg.tool_call_id,
+                                raw_event=event,
                             )
                         )
                 else:
@@ -263,18 +262,18 @@ class LangGraphAgent:
                     name = event.get("name")
                     tool_call_data = self._get_tool_call_data(name, args)
                     yield self._dispatch_event(
-                        ToolCallEndEvent(
-                            timestamp=ts,
-                            tool_call_id=tool_call_data['id'],
-                            raw_event=event,
-                        )
-                    )
-                    yield self._dispatch_event(
                         ToolCallResultEvent(
                             timestamp=ts,
                             message_id=str(uuid.uuid4()), # 通常结果绑定在调用 ID 上
                             tool_call_id=tool_call_data['id'],
                             content=output.content,
+                        )
+                    )
+                    yield self._dispatch_event(
+                        ToolCallEndEvent(
+                            timestamp=ts,
+                            tool_call_id=tool_call_data['id'],
+                            raw_event=event,
                         )
                     )
                 

@@ -26,7 +26,7 @@ def add_langgraph_fastapi_endpoint(app: FastAPI, agent: LangGraphAgent, path: st
                 # 将事件对象转换为JSON格式
                 if event is not None:
                     # 使用model_dump_json方法将事件序列化为JSON
-                    event_json = event.model_dump_json(exclude_none=True)
+                    event_json = event.model_dump_json(exclude_none=True, by_alias=True)
                     # 按照Server-Sent Events格式发送数据
                     yield f"data: {event_json}\n\n"
 
