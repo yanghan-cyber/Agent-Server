@@ -106,7 +106,8 @@ class LangGraphAgent:
                             timestamp=ts,
                             run_id=run_id,
                             thread_id=metadata.get("thread_id"),
-                            input=None
+                            input=None,
+                            raw_event=event,
                         )
                     )
                 # 否则，如果是具体的节点（Node）或 Chain，且不在忽略列表中
@@ -115,7 +116,8 @@ class LangGraphAgent:
                         yield self._dispatch_event(
                             StepStartedEvent(
                                 timestamp=ts,
-                                step_name=name
+                                step_name=name,
+                                raw_event=event,
                             )
                         )
                 self.active_run['node_name'] = name
@@ -132,7 +134,8 @@ class LangGraphAgent:
                             timestamp=ts,
                             run_id=run_id,
                             thread_id=metadata.get("thread_id"),
-                            result=str(output) if output else None
+                            result=str(output) if output else None,
+                            raw_event=event
                         )
                     )
                 # 子节点结束 -> StepFinished
@@ -140,7 +143,8 @@ class LangGraphAgent:
                     yield self._dispatch_event(
                         StepFinishedEvent(
                             timestamp=ts,
-                            step_name=name
+                            step_name=name,
+                            raw_event=event
                         )
                     )
                 self.active_run['node_name'] = name
@@ -156,7 +160,8 @@ class LangGraphAgent:
                         RunErrorEvent(
                             timestamp=ts,
                             message=str(data.get("error", "Unknown Error")),
-                            code="500"
+                            code="500",
+                            raw_event=event
                         )
                     )
 
@@ -247,6 +252,7 @@ class LangGraphAgent:
                                 message_id=str(uuid.uuid4()),
                                 tool_call_id=tool_msg.tool_call_id,
                                 content=tool_msg.content,
+                                raw_event=event
                             )
                         )
                         yield self._dispatch_event(
@@ -267,6 +273,7 @@ class LangGraphAgent:
                             message_id=str(uuid.uuid4()), # 通常结果绑定在调用 ID 上
                             tool_call_id=tool_call_data['id'],
                             content=output.content,
+                            raw_event=event
                         )
                     )
                     yield self._dispatch_event(
